@@ -1,0 +1,49 @@
+[package]
+name = "accesskit_web"
+version = "0.1.0"
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "AccessKit accessibility adapter for canvas-based web applications"
+
+[dependencies]
+accesskit = { version = "0.24.0", path = "../../common" }
+accesskit_consumer = { version = "0.34.0", path = "../../consumer" }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+wasm-bindgen = "0.2"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies.web-sys]
+version = "0.3"
+features = [
+    "AbortController",
+    "AbortSignal",
+    "AddEventListenerOptions",
+    "CssStyleDeclaration",
+    "console",
+    "Document",
+    "DomRect",
+    "Element",
+    "Event",
+    "EventTarget",
+    "FocusOptions",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlInputElement",
+    "HtmlTextAreaElement",
+    "KeyboardEvent",
+    "MutationObserver",
+    "MutationObserverInit",
+    "Node",
+    "NodeList",
+    "ResizeObserver",
+    "VisualViewport",
+    "Window",
+]
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+web-sys = { version = "0.3", features = ["DomImplementation", "EventInit"] }

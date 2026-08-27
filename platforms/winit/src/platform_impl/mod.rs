@@ -31,6 +31,10 @@ mod platform;
 #[path = "android.rs"]
 mod platform;
 
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[path = "web.rs"]
+mod platform;
+
 #[cfg(not(any(
     target_os = "windows",
     target_os = "macos",
@@ -44,7 +48,8 @@ mod platform;
             target_os = "openbsd"
         )
     ),
-    all(feature = "accesskit_android", target_os = "android")
+    all(feature = "accesskit_android", target_os = "android"),
+    all(target_arch = "wasm32", target_os = "unknown")
 )))]
 #[path = "null.rs"]
 mod platform;

@@ -36,6 +36,9 @@ accesskit_unix = { version = "0.21.0", path = "../unix", optional = true, defaul
 [target.'cfg(target_os = "android")'.dependencies]
 accesskit_android = { version = "0.7.2", path = "../android", optional = true, features = ["embedded-dex"] }
 
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+accesskit_web = { version = "0.1.0", path = "../web" }
+
 [dev-dependencies.winit]
 version = "0.30.5"
 default-features = false
@@ -48,4 +51,3 @@ softbuffer = { version = "0.4.0", default-features = false, features = [
     "wayland",
     "wayland-dlopen",
 ] }
-

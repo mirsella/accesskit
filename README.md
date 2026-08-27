@@ -1,5 +1,9 @@
 # AccessKit
 
+This branch is based on upstream commit `528fba56534d06551d8ce8c28cb444bd18ed1cfc`
+(`accesskit_winit-v0.32.0`) and adds the `accesskit_web` canvas adapter without
+changing the existing package versions.
+
 **Accessibility infrastructure for UI toolkits**
 
 [![Build Status](https://github.com/AccessKit/accesskit/actions/workflows/ci.yml/badge.svg)](https://github.com/AccessKit/accesskit/actions)
@@ -39,12 +43,12 @@ The following platform adapters are currently available:
 * [Android adapter](https://crates.io/crates/accesskit_android): This adapter implements the Java-based Android accessibility API.
 * [macOS adapter](https://crates.io/crates/accesskit_macos): This adapter implements the NSAccessibility protocols in the AppKit framework.
 * [Unix adapter](https://crates.io/crates/accesskit_unix): This adapter implements the AT-SPI D-Bus interfaces, using [zbus](https://github.com/dbus2/zbus), a pure-Rust implementation of D-Bus.
+* Web adapter: This branch provides `accesskit_web` for canvas-based applications.
 * [Windows adapter](https://crates.io/crates/accesskit_windows): This adapter implements UI Automation, the current Windows accessibility API.
 
 #### Planned adapters
 
 * iOS
-* web (for applications that render their own UI elements to a canvas)
 
 ### Adapters for cross-platform windowing layers
 
