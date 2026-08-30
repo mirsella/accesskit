@@ -423,14 +423,20 @@ fn sync_dom(state: &Rc<RefCell<State>>) -> Result<(), JsValue> {
         .copied()
         .collect::<HashSet<_>>();
     sync_subtree(state, root_id, None, 0, &mut stale)?;
-    for key in stale {
-        state
-            .borrow_mut()
-            .elements
-            .remove(&key)
-            .expect("stale DOM node must remain retained")
-            .element
-            .remove();
+    let stale_nodes = {
+        let mut state = state.borrow_mut();
+        let elements = &mut state.elements;
+        stale
+            .into_iter()
+            .map(|key| {
+                elements
+                    .remove(&key)
+                    .expect("stale DOM node must remain retained")
+            })
+            .collect::<Vec<_>>()
+    };
+    for node in stale_nodes {
+        node.element.remove();
     }
     Ok(())
 }
@@ -1633,6 +1639,31 @@ mod browser_tests {
         );
         drop(second_adapter);
         second_canvas.remove();
+
+        button_element.focus().unwrap();
+        assert!(document
+            .active_element()
+            .unwrap()
+            .is_same_node(Some(&button)));
+        let action_count = actions.borrow().len();
+        let mut replacement_root = Node::new(Role::RootWebArea);
+        replacement_root.set_label("Replacement");
+        replacement_root.set_bounds(Rect::new(0.0, 0.0, 100.0, 100.0));
+        adapter.update_if_active(|| TreeUpdate {
+            nodes: vec![(NodeId(3), replacement_root)],
+            tree: Some(TreeData::new(NodeId(3))),
+            tree_id: TreeId::ROOT,
+            focus: NodeId(3),
+        });
+        assert!(!button.is_connected());
+        assert_eq!(actions.borrow().len(), action_count);
+        assert_eq!(
+            root.first_element_child()
+                .unwrap()
+                .get_attribute("aria-label")
+                .as_deref(),
+            Some("Replacement")
+        );
 
         drop(adapter);
         assert!(!root.is_connected());
