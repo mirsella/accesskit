@@ -16,7 +16,7 @@ use atspi::{
     proxy::{bus::BusProxy, socket::SocketProxy},
     Interface, InterfaceSet,
 };
-use std::{env::var, io};
+use std::env::var;
 use zbus::{
     connection::Builder,
     names::{BusName, InterfaceName, MemberName, OwnedUniqueName},
@@ -148,11 +148,7 @@ impl Bus {
     where
         T: zbus::object_server::Interface,
     {
-        map_or_ignoring_broken_pipe(
-            self.conn.object_server().at(path, interface).await,
-            false,
-            |result| result,
-        )
+        ignore_recoverable_error(self.conn.object_server().at(path, interface).await, false)
     }
 
     pub(crate) async fn unregister_interfaces(
@@ -199,11 +195,7 @@ impl Bus {
     where
         T: zbus::object_server::Interface,
     {
-        map_or_ignoring_broken_pipe(
-            self.conn.object_server().remove::<T, _>(path).await,
-            false,
-            |result| result,
-        )
+        ignore_recoverable_error(self.conn.object_server().remove::<T, _>(path).await, false)
     }
 
     pub(crate) async fn emit_object_event(
@@ -376,7 +368,7 @@ impl Bus {
         signal_name: &str,
         body: EventBodyBorrowed<'_>,
     ) -> Result<()> {
-        map_or_ignoring_broken_pipe(
+        ignore_recoverable_error(
             self.conn
                 .emit_signal(
                     Option::<BusName>::None,
@@ -387,24 +379,24 @@ impl Bus {
                 )
                 .await,
             (),
-            |_| (),
         )
     }
 }
 
-pub(crate) fn map_or_ignoring_broken_pipe<T, U, F>(
-    result: zbus::Result<T>,
-    default: U,
-    f: F,
-) -> zbus::Result<U>
-where
-    F: FnOnce(T) -> U,
-{
+pub(crate) fn ignore_recoverable_error<T>(result: zbus::Result<T>, default: T) -> zbus::Result<T> {
     match result {
-        Ok(result) => Ok(f(result)),
-        Err(zbus::Error::InputOutput(error)) if error.kind() == io::ErrorKind::BrokenPipe => {
-            Ok(default)
+        Err(error @ (zbus::Error::InterfaceExists(..) | zbus::Error::MissingParameter(..))) => {
+            Err(error)
         }
-        Err(error) => Err(error),
+        Err(_) => Ok(default),
+        result => result,
     }
+}
+
+#[test]
+fn ignores_runtime_errors_but_not_programming_errors() {
+    assert!(ignore_recoverable_error::<()>(Err(zbus::Error::InterfaceNotFound), ()).is_ok());
+    assert!(
+        ignore_recoverable_error::<()>(Err(zbus::Error::MissingParameter("test")), ()).is_err()
+    );
 }

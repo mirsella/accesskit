@@ -25,7 +25,7 @@ use zbus::{connection::Builder, Connection};
 
 use crate::{
     adapter::{AdapterState, Callback, Message},
-    atspi::{map_or_ignoring_broken_pipe, Bus},
+    atspi::{ignore_recoverable_error, Bus},
     executor::Executor,
     util::block_on,
 };
@@ -58,7 +58,11 @@ pub(crate) fn get_or_init_messages() -> Sender<Message> {
                     if let Ok(session_bus) = Builder::session() {
                         if let Ok(session_bus) = session_bus.internal_executor(false).build().await
                         {
-                            run_event_loop(&executor, session_bus, rx).await.unwrap();
+                            ignore_recoverable_error(
+                                run_event_loop(&executor, session_bus, rx).await,
+                                (),
+                            )
+                            .expect("unrecoverable accessibility event loop error");
                         }
                     }
                 }))
@@ -169,7 +173,10 @@ async fn run_event_loop(
                 atspi_bus = None;
                 if let Some(change) = change {
                     if change.get().await? {
-                        atspi_bus = map_or_ignoring_broken_pipe(Bus::new(&session_bus, executor).await, None, Some)?;
+                        atspi_bus = ignore_recoverable_error(
+                            Bus::new(&session_bus, executor).await.map(Some),
+                            None,
+                        )?;
                     }
                 }
                 for entry in &mut adapters {
