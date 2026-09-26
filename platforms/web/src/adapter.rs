@@ -375,6 +375,11 @@ fn web_filter(node: &Node) -> FilterResult {
         }
     }
 
+    // Keep inactive panels as hidden relationship targets for their tabs.
+    // Their descendants remain excluded by the ordinary hidden-node filter.
+    if node.role() == Role::TabPanel && node.is_hidden() {
+        return FilterResult::Include;
+    }
     let common = common_filter_with_root_exception(node);
     if common != FilterResult::Include {
         return common;
@@ -583,6 +588,22 @@ fn handle_event(state: &Rc<RefCell<State>>, event: Event) {
             let Some(keyboard) = event.dyn_ref::<web_sys::KeyboardEvent>() else {
                 return;
             };
+            if !keyboard.alt_key() && !keyboard.ctrl_key() && !keyboard.meta_key() {
+                let target = {
+                    let state_ref = state.borrow();
+                    state_ref
+                        .tree
+                        .as_ref()
+                        .and_then(|tree| tree.state().node_by_id(id))
+                        .and_then(|node| tab_keyboard_target(&node, &keyboard.key()))
+                };
+                if let Some(target) = target {
+                    dispatch_action(state, target, Action::Focus, None);
+                    dispatch_action(state, target, Action::Click, None);
+                    keyboard.prevent_default();
+                    return;
+                }
+            }
             if keyboard.repeat() || !matches!(keyboard.key().as_str(), "Enter" | " ") {
                 return;
             }
@@ -613,6 +634,43 @@ fn handle_event(state: &Rc<RefCell<State>>, event: Event) {
             dispatch_selection(state, id, &event);
         }
         _ => {}
+    }
+}
+
+fn tab_keyboard_target(node: &Node, key: &str) -> Option<NodeId> {
+    if node.role() != Role::Tab || node.is_disabled() {
+        return None;
+    }
+    let mut parent = node.parent();
+    let list = loop {
+        let ancestor = parent?;
+        if ancestor.role() == Role::TabList {
+            break ancestor;
+        }
+        parent = ancestor.parent();
+    };
+    let vertical = list.orientation() == Some(Orientation::Vertical);
+    let tabs = || {
+        list.filtered_children(web_filter)
+            .filter(|tab| tab.role() == Role::Tab && !tab.is_disabled())
+            .map(|tab| tab.id())
+    };
+    let backward = match key {
+        "Home" => return tabs().next(),
+        "End" => return tabs().next_back(),
+        "ArrowRight" if !vertical => false,
+        "ArrowLeft" if !vertical => true,
+        "ArrowDown" if vertical => false,
+        "ArrowUp" if vertical => true,
+        _ => return None,
+    };
+    let mut remaining = tabs();
+    if backward {
+        remaining.rfind(|id| *id == node.id())?;
+        remaining.next_back().or_else(|| tabs().next_back())
+    } else {
+        remaining.find(|id| *id == node.id())?;
+        remaining.next().or_else(|| tabs().next())
     }
 }
 
@@ -847,6 +905,9 @@ fn semantics_for(tree: &Tree, node: &Node, root_id: &str) -> Semantics {
     if let Some(input_type) = dom_role.input_type {
         attribute(&mut attributes, "type", input_type);
     }
+    if node.is_hidden() {
+        attribute(&mut attributes, "hidden", "");
+    }
     if node.role() == Role::EmailInput {
         attribute(&mut attributes, "inputmode", "email");
         attribute(&mut attributes, "autocomplete", "email");
@@ -860,6 +921,7 @@ fn semantics_for(tree: &Tree, node: &Node, root_id: &str) -> Semantics {
         attribute(&mut attributes, "aria-describedby", &described_by);
     }
     for (name, ids) in [
+        ("aria-labelledby", data.labelled_by()),
         ("aria-controls", data.controls()),
         ("aria-details", data.details()),
         ("aria-owns", data.owns()),
@@ -959,6 +1021,7 @@ fn semantics_for(tree: &Tree, node: &Node, root_id: &str) -> Semantics {
     }
 
     let focusable = !node.is_disabled()
+        && (node.role() != Role::Tab || node.is_selected() == Some(true))
         && (node.is_focusable(&common_filter_with_root_exception)
             || node.is_clickable(&common_filter_with_root_exception)
             || node.is_text_input());
@@ -1242,7 +1305,7 @@ mod browser_tests {
     use wasm_bindgen_test::*;
     use web_sys::{Event, EventInit, HtmlCanvasElement, HtmlElement, HtmlInputElement};
 
-    use super::{sync_geometry, web_filter, Adapter, ROOT_ID};
+    use super::{sync_geometry, web_filter, Adapter, LocalNodeId, ROOT_ID};
 
     wasm_bindgen_test_configure!(run_in_browser);
 
@@ -1255,6 +1318,100 @@ mod browser_tests {
     }
 
     struct SliderTree;
+
+    struct TabsTree;
+
+    impl ActivationHandler for TabsTree {
+        fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
+            let root_id = LocalNodeId(0);
+            let mut root = accesskit::Node::new(Role::RootWebArea);
+            root.set_children(vec![
+                LocalNodeId(1),
+                LocalNodeId(5),
+                LocalNodeId(6),
+                LocalNodeId(7),
+            ]);
+            let mut list = accesskit::Node::new(Role::TabList);
+            list.set_children(vec![LocalNodeId(2), LocalNodeId(3), LocalNodeId(4)]);
+            let mut nodes = vec![(root_id, root), (LocalNodeId(1), list)];
+            for (index, label) in ["Deck", "Battle", "Leaderboard"].iter().enumerate() {
+                let id = LocalNodeId(index as u64 + 2);
+                let panel_id = LocalNodeId(index as u64 + 5);
+                let mut tab = accesskit::Node::new(Role::Tab);
+                tab.set_label(*label);
+                tab.set_selected(index == 1);
+                tab.set_controls(vec![panel_id]);
+                tab.add_action(Action::Focus);
+                tab.add_action(Action::Click);
+                let mut panel = accesskit::Node::new(Role::TabPanel);
+                panel.set_labelled_by(vec![id]);
+                panel.add_action(Action::Focus);
+                if index != 1 {
+                    panel.set_hidden();
+                }
+                nodes.extend([(id, tab), (panel_id, panel)]);
+            }
+            Some(TreeUpdate {
+                nodes,
+                tree: Some(TreeData::new(root_id)),
+                tree_id: TreeId::ROOT,
+                focus: root_id,
+            })
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn tabs_preserve_relationships_and_route_keyboard_navigation() {
+        let document = web_sys::window().unwrap().document().unwrap();
+        let canvas = document
+            .create_element("canvas")
+            .unwrap()
+            .dyn_into::<HtmlCanvasElement>()
+            .unwrap();
+        document.body().unwrap().append_child(&canvas).unwrap();
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let adapter = Adapter::new(
+            canvas.clone(),
+            TabsTree,
+            Actions(Rc::clone(&actions)),
+            Deactivation,
+        )
+        .unwrap();
+        let root = adapter.state.borrow().root.clone();
+        let tabs = root.query_selector_all("[role=tab]").unwrap();
+        for index in 0..3 {
+            let tab = tabs.item(index).unwrap().dyn_into::<HtmlElement>().unwrap();
+            assert_eq!(tab.tab_index(), if index == 1 { 0 } else { -1 });
+            let panel = document
+                .get_element_by_id(&tab.get_attribute("aria-controls").unwrap())
+                .unwrap();
+            assert_eq!(panel.get_attribute("aria-labelledby"), Some(tab.id()));
+            assert_eq!(panel.has_attribute("hidden"), index != 1);
+        }
+        for (index, key, target) in [
+            (1, "ArrowRight", 4),
+            (1, "ArrowLeft", 2),
+            (1, "Home", 2),
+            (1, "End", 4),
+            (0, "ArrowLeft", 4),
+            (2, "ArrowRight", 2),
+        ] {
+            let init = web_sys::KeyboardEventInit::new();
+            init.set_key(key);
+            init.set_bubbles(true);
+            init.set_cancelable(true);
+            let event = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &init)
+                .unwrap();
+            tabs.item(index).unwrap().dispatch_event(&event).unwrap();
+            assert!(event.default_prevented());
+            let requests = actions.borrow();
+            assert_eq!(requests[requests.len() - 2].action, Action::Focus);
+            assert_eq!(requests.last().unwrap().action, Action::Click);
+            assert_eq!(requests.last().unwrap().target_node, LocalNodeId(target));
+        }
+        drop(adapter);
+        canvas.remove();
+    }
 
     impl ActivationHandler for SliderTree {
         fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
