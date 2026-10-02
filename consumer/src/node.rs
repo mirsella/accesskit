@@ -19,10 +19,7 @@ use alloc::{
 use core::{fmt, iter::FusedIterator};
 
 use crate::filters::FilterResult;
-use crate::iterators::{
-    ChildIds, FilteredChildren, FollowingFilteredSiblings, FollowingSiblings, LabelledBy,
-    PrecedingFilteredSiblings, PrecedingSiblings,
-};
+use crate::iterators::{ChildIds, FilteredNodes, LabelledBy};
 use crate::tree::{State as TreeState, TreeIndex};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -178,7 +175,7 @@ impl<'a> Node<'a> {
         &self,
         filter: impl Fn(&Node) -> FilterResult + 'a,
     ) -> impl DoubleEndedIterator<Item = Node<'a>> + FusedIterator<Item = Node<'a>> + 'a {
-        FilteredChildren::new(*self, filter)
+        FilteredNodes::children(*self, filter)
     }
 
     pub fn following_sibling_ids(
@@ -187,7 +184,18 @@ impl<'a> Node<'a> {
            + ExactSizeIterator<Item = NodeId>
            + FusedIterator<Item = NodeId>
            + 'a {
-        FollowingSiblings::new(*self)
+        let children = self.parent_and_index().map_or(&[][..], |(parent, index)| {
+            // Graft nodes have only one child, whose ID belongs to another tree.
+            if parent.is_graft() {
+                &[]
+            } else {
+                &parent.data().children()[index + 1..]
+            }
+        });
+        ChildIds::Normal {
+            parent_id: self.id,
+            children: children.iter(),
+        }
     }
 
     pub fn following_siblings(
@@ -205,7 +213,7 @@ impl<'a> Node<'a> {
         &self,
         filter: impl Fn(&Node) -> FilterResult + 'a,
     ) -> impl DoubleEndedIterator<Item = Node<'a>> + FusedIterator<Item = Node<'a>> + 'a {
-        FollowingFilteredSiblings::new(*self, filter)
+        FilteredNodes::siblings::<false>(*self, filter)
     }
 
     pub fn preceding_sibling_ids(
@@ -214,7 +222,18 @@ impl<'a> Node<'a> {
            + ExactSizeIterator<Item = NodeId>
            + FusedIterator<Item = NodeId>
            + 'a {
-        PrecedingSiblings::new(*self)
+        let children = self.parent_and_index().map_or(&[][..], |(parent, index)| {
+            if parent.is_graft() {
+                &[]
+            } else {
+                &parent.data().children()[..index]
+            }
+        });
+        ChildIds::Normal {
+            parent_id: self.id,
+            children: children.iter(),
+        }
+        .rev()
     }
 
     pub fn preceding_siblings(
@@ -232,7 +251,7 @@ impl<'a> Node<'a> {
         &self,
         filter: impl Fn(&Node) -> FilterResult + 'a,
     ) -> impl DoubleEndedIterator<Item = Node<'a>> + FusedIterator<Item = Node<'a>> + 'a {
-        PrecedingFilteredSiblings::new(*self, filter)
+        FilteredNodes::siblings::<true>(*self, filter).rev()
     }
 
     pub fn deepest_first_child(self) -> Option<Node<'a>> {
@@ -247,8 +266,8 @@ impl<'a> Node<'a> {
         &self,
         filter: &impl Fn(&Node) -> FilterResult,
     ) -> Option<Node<'a>> {
-        let mut deepest_child = self.first_filtered_child(filter)?;
-        while let Some(first_child) = deepest_child.first_filtered_child(filter) {
+        let mut deepest_child = self.filtered_child::<false>(filter)?;
+        while let Some(first_child) = deepest_child.filtered_child::<false>(filter) {
             deepest_child = first_child;
         }
         Some(deepest_child)
@@ -266,8 +285,8 @@ impl<'a> Node<'a> {
         &self,
         filter: &impl Fn(&Node) -> FilterResult,
     ) -> Option<Node<'a>> {
-        let mut deepest_child = self.last_filtered_child(filter)?;
-        while let Some(last_child) = deepest_child.last_filtered_child(filter) {
+        let mut deepest_child = self.filtered_child::<true>(filter)?;
+        while let Some(last_child) = deepest_child.filtered_child::<true>(filter) {
             deepest_child = last_child;
         }
         Some(deepest_child)
@@ -701,7 +720,7 @@ impl<'a> Node<'a> {
                     | Role::RadioButton
             )
         {
-            LabelledBy::FromDescendants(FilteredChildren::new(*self, &descendant_label_filter))
+            LabelledBy::FromDescendants(FilteredNodes::children(*self, &descendant_label_filter))
         } else {
             LabelledBy::Explicit {
                 ids: explicit.iter(),
@@ -953,37 +972,24 @@ impl<'a> Node<'a> {
         result
     }
 
-    pub(crate) fn first_filtered_child(
+    pub(crate) fn filtered_child<const REVERSE: bool>(
         &self,
         filter: &impl Fn(&Node) -> FilterResult,
     ) -> Option<Node<'a>> {
-        for child in self.children() {
-            let result = filter(&child);
-            if result == FilterResult::Include {
-                return Some(child);
-            }
-            if result == FilterResult::ExcludeNode {
-                if let Some(descendant) = child.first_filtered_child(filter) {
-                    return Some(descendant);
+        let mut children = self.children();
+        while let Some(child) = if REVERSE {
+            children.next_back()
+        } else {
+            children.next()
+        } {
+            match filter(&child) {
+                FilterResult::Include => return Some(child),
+                FilterResult::ExcludeNode => {
+                    if let Some(descendant) = child.filtered_child::<REVERSE>(filter) {
+                        return Some(descendant);
+                    }
                 }
-            }
-        }
-        None
-    }
-
-    pub(crate) fn last_filtered_child(
-        &self,
-        filter: &impl Fn(&Node) -> FilterResult,
-    ) -> Option<Node<'a>> {
-        for child in self.children().rev() {
-            let result = filter(&child);
-            if result == FilterResult::Include {
-                return Some(child);
-            }
-            if result == FilterResult::ExcludeNode {
-                if let Some(descendant) = child.last_filtered_child(filter) {
-                    return Some(descendant);
-                }
+                FilterResult::ExcludeSubtree => (),
             }
         }
         None
