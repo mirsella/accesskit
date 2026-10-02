@@ -73,461 +73,116 @@ impl ExactSizeIterator for ChildIds<'_> {
 
 impl FusedIterator for ChildIds<'_> {}
 
-/// An iterator that yields following siblings of a node.
-///
-/// This struct is created by the [`following_siblings`](Node::following_siblings) method on [`Node`].
-pub struct FollowingSiblings<'a> {
-    back_position: usize,
-    done: bool,
-    front_position: usize,
-    parent: Option<Node<'a>>,
-    node_id: NodeId,
-}
-
-impl<'a> FollowingSiblings<'a> {
-    pub(crate) fn new(node: Node<'a>) -> Self {
-        let parent_and_index = node.parent_and_index();
-        let (back_position, front_position, done) =
-            if let Some((ref parent, index)) = parent_and_index {
-                // Graft nodes have only one child (the subtree root)
-                if parent.is_graft() {
-                    (0, 0, true)
-                } else {
-                    let back_position = parent.data().children().len() - 1;
-                    let front_position = index + 1;
-                    (
-                        back_position,
-                        front_position,
-                        front_position > back_position,
-                    )
-                }
-            } else {
-                (0, 0, true)
-            };
-        Self {
-            back_position,
-            done,
-            front_position,
-            parent: parent_and_index.map(|(parent, _)| parent),
-            node_id: node.id,
-        }
-    }
-}
-
-impl Iterator for FollowingSiblings<'_> {
-    type Item = NodeId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            None
-        } else {
-            self.done = self.front_position == self.back_position;
-            let child = self
-                .parent
-                .as_ref()?
-                .data()
-                .children()
-                .get(self.front_position)?;
-            self.front_position += 1;
-            Some(self.node_id.with_same_tree(*child))
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = match self.done {
-            true => 0,
-            _ => self.back_position + 1 - self.front_position,
-        };
-        (len, Some(len))
-    }
-}
-
-impl DoubleEndedIterator for FollowingSiblings<'_> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.done {
-            None
-        } else {
-            self.done = self.back_position == self.front_position;
-            let child = self
-                .parent
-                .as_ref()?
-                .data()
-                .children()
-                .get(self.back_position)?;
-            self.back_position -= 1;
-            Some(self.node_id.with_same_tree(*child))
-        }
-    }
-}
-
-impl ExactSizeIterator for FollowingSiblings<'_> {}
-
-impl FusedIterator for FollowingSiblings<'_> {}
-
-/// An iterator that yields preceding siblings of a node.
-///
-/// This struct is created by the [`preceding_siblings`](Node::preceding_siblings) method on [`Node`].
-pub struct PrecedingSiblings<'a> {
-    back_position: usize,
-    done: bool,
-    front_position: usize,
-    parent: Option<Node<'a>>,
-    node_id: NodeId,
-}
-
-impl<'a> PrecedingSiblings<'a> {
-    pub(crate) fn new(node: Node<'a>) -> Self {
-        let parent_and_index = node.parent_and_index();
-        let (back_position, front_position, done) =
-            if let Some((ref parent, index)) = parent_and_index {
-                // Graft nodes have only one child (the subtree root)
-                if parent.is_graft() {
-                    (0, 0, true)
-                } else {
-                    let front_position = index.saturating_sub(1);
-                    (0, front_position, index == 0)
-                }
-            } else {
-                (0, 0, true)
-            };
-        Self {
-            back_position,
-            done,
-            front_position,
-            parent: parent_and_index.map(|(parent, _)| parent),
-            node_id: node.id,
-        }
-    }
-}
-
-impl Iterator for PrecedingSiblings<'_> {
-    type Item = NodeId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            None
-        } else {
-            self.done = self.front_position == self.back_position;
-            let child = self
-                .parent
-                .as_ref()?
-                .data()
-                .children()
-                .get(self.front_position)?;
-            if !self.done {
-                self.front_position -= 1;
-            }
-            Some(self.node_id.with_same_tree(*child))
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = match self.done {
-            true => 0,
-            _ => self.front_position + 1 - self.back_position,
-        };
-        (len, Some(len))
-    }
-}
-
-impl DoubleEndedIterator for PrecedingSiblings<'_> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.done {
-            None
-        } else {
-            self.done = self.back_position == self.front_position;
-            let child = self
-                .parent
-                .as_ref()?
-                .data()
-                .children()
-                .get(self.back_position)?;
-            self.back_position += 1;
-            Some(self.node_id.with_same_tree(*child))
-        }
-    }
-}
-
-impl ExactSizeIterator for PrecedingSiblings<'_> {}
-
-impl FusedIterator for PrecedingSiblings<'_> {}
-
-fn next_filtered_sibling<'a>(
-    node: Option<Node<'a>>,
+fn filtered_sibling<'a, const REVERSE: bool>(
+    mut current: Node<'a>,
     filter: &impl Fn(&Node) -> FilterResult,
 ) -> Option<Node<'a>> {
-    let mut next = node;
     let mut consider_children = false;
-    while let Some(current) = next {
-        if let Some(Some(child)) = consider_children.then(|| current.children().next()) {
-            let result = filter(&child);
-            next = Some(child);
-            if result == FilterResult::Include {
-                return next;
-            }
-            consider_children = result == FilterResult::ExcludeNode;
-        } else if let Some(sibling) = current.following_siblings().next() {
-            let result = filter(&sibling);
-            next = Some(sibling);
-            if result == FilterResult::Include {
-                return next;
-            }
-            consider_children = result == FilterResult::ExcludeNode;
-        } else {
-            let parent = current.parent();
-            next = parent;
-            if let Some(parent) = parent {
-                if filter(&parent) != FilterResult::ExcludeNode {
-                    return None;
-                }
-                consider_children = false;
+    loop {
+        let candidate = if consider_children {
+            if REVERSE {
+                current.children().next_back()
             } else {
+                current.children().next()
+            }
+        } else {
+            None
+        }
+        .or_else(|| {
+            if REVERSE {
+                current.preceding_siblings().next()
+            } else {
+                current.following_siblings().next()
+            }
+        });
+
+        if let Some(candidate) = candidate {
+            current = candidate;
+            match filter(&current) {
+                FilterResult::Include => return Some(current),
+                FilterResult::ExcludeNode => consider_children = true,
+                FilterResult::ExcludeSubtree => consider_children = false,
+            }
+        } else {
+            current = current.parent()?;
+            if filter(&current) != FilterResult::ExcludeNode {
                 return None;
             }
+            consider_children = false;
         }
     }
-    None
 }
 
-fn previous_filtered_sibling<'a>(
-    node: Option<Node<'a>>,
-    filter: &impl Fn(&Node) -> FilterResult,
-) -> Option<Node<'a>> {
-    let mut previous = node;
-    let mut consider_children = false;
-    while let Some(current) = previous {
-        if let Some(Some(child)) = consider_children.then(|| current.children().next_back()) {
-            let result = filter(&child);
-            previous = Some(child);
-            if result == FilterResult::Include {
-                return previous;
-            }
-            consider_children = result == FilterResult::ExcludeNode;
-        } else if let Some(sibling) = current.preceding_siblings().next() {
-            let result = filter(&sibling);
-            previous = Some(sibling);
-            if result == FilterResult::Include {
-                return previous;
-            }
-            consider_children = result == FilterResult::ExcludeNode;
-        } else {
-            let parent = current.parent();
-            previous = parent;
-            if let Some(parent) = parent {
-                if filter(&parent) != FilterResult::ExcludeNode {
-                    return None;
-                }
-                consider_children = false;
+/// A double-ended range of visible siblings, including both endpoints.
+pub(crate) struct FilteredNodes<'a, Filter: Fn(&Node) -> FilterResult> {
+    filter: Filter,
+    remaining: Option<(Node<'a>, Node<'a>)>,
+}
+
+impl<'a, Filter: Fn(&Node) -> FilterResult> FilteredNodes<'a, Filter> {
+    pub(crate) fn children(parent: Node<'a>, filter: Filter) -> Self {
+        let remaining = parent.filtered_child::<false>(&filter).and_then(|front| {
+            parent
+                .filtered_child::<true>(&filter)
+                .map(|back| (front, back))
+        });
+        Self { filter, remaining }
+    }
+
+    pub(crate) fn siblings<const REVERSE: bool>(node: Node<'a>, filter: Filter) -> Self {
+        let remaining = filtered_sibling::<REVERSE>(node, &filter).and_then(|near| {
+            let parent = node.filtered_parent(&filter)?;
+            if REVERSE {
+                parent
+                    .filtered_child::<false>(&filter)
+                    .map(|far| (far, near))
             } else {
-                return None;
+                parent
+                    .filtered_child::<true>(&filter)
+                    .map(|far| (near, far))
             }
-        }
+        });
+        Self { filter, remaining }
     }
-    None
-}
 
-/// An iterator that yields following siblings of a node according to the
-/// specified filter.
-///
-/// This struct is created by the [`following_filtered_siblings`](Node::following_filtered_siblings) method on [`Node`].
-pub struct FollowingFilteredSiblings<'a, Filter: Fn(&Node) -> FilterResult> {
-    filter: Filter,
-    back: Option<Node<'a>>,
-    done: bool,
-    front: Option<Node<'a>>,
-}
-
-impl<'a, Filter: Fn(&Node) -> FilterResult> FollowingFilteredSiblings<'a, Filter> {
-    pub(crate) fn new(node: Node<'a>, filter: Filter) -> Self {
-        let front = next_filtered_sibling(Some(node), &filter);
-        let back = node
-            .filtered_parent(&filter)
-            .and_then(|parent| parent.last_filtered_child(&filter));
-        Self {
-            filter,
-            back,
-            done: back.is_none() || front.is_none(),
-            front,
+    fn next_end<const REVERSE: bool>(&mut self) -> Option<Node<'a>> {
+        let (front, back) = self.remaining.take()?;
+        let (current, last) = if REVERSE {
+            (back, front)
+        } else {
+            (front, back)
+        };
+        if current.id() != last.id() {
+            self.remaining = filtered_sibling::<REVERSE>(current, &self.filter).map(|next| {
+                if REVERSE {
+                    (front, next)
+                } else {
+                    (next, back)
+                }
+            });
         }
+        Some(current)
     }
 }
 
-impl<'a, Filter: Fn(&Node) -> FilterResult> Iterator for FollowingFilteredSiblings<'a, Filter> {
+impl<'a, Filter: Fn(&Node) -> FilterResult> Iterator for FilteredNodes<'a, Filter> {
     type Item = Node<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            None
-        } else {
-            self.done = self
-                .front
-                .as_ref()
-                .zip(self.back.as_ref())
-                .map(|(f, b)| f.id() == b.id())
-                .unwrap_or(true);
-            let current = self.front;
-            self.front = next_filtered_sibling(self.front, &self.filter);
-            current
-        }
+        self.next_end::<false>()
     }
 }
 
-impl<Filter: Fn(&Node) -> FilterResult> DoubleEndedIterator
-    for FollowingFilteredSiblings<'_, Filter>
-{
+impl<Filter: Fn(&Node) -> FilterResult> DoubleEndedIterator for FilteredNodes<'_, Filter> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.done {
-            None
-        } else {
-            self.done = self
-                .front
-                .as_ref()
-                .zip(self.back.as_ref())
-                .map(|(f, b)| f.id() == b.id())
-                .unwrap_or(true);
-            let current = self.back;
-            self.back = previous_filtered_sibling(self.back, &self.filter);
-            current
-        }
+        self.next_end::<true>()
     }
 }
 
-impl<Filter: Fn(&Node) -> FilterResult> FusedIterator for FollowingFilteredSiblings<'_, Filter> {}
-
-/// An iterator that yields preceding siblings of a node according to the
-/// specified filter.
-///
-/// This struct is created by the [`preceding_filtered_siblings`](Node::preceding_filtered_siblings) method on [`Node`].
-pub struct PrecedingFilteredSiblings<'a, Filter: Fn(&Node) -> FilterResult> {
-    filter: Filter,
-    back: Option<Node<'a>>,
-    done: bool,
-    front: Option<Node<'a>>,
-}
-
-impl<'a, Filter: Fn(&Node) -> FilterResult> PrecedingFilteredSiblings<'a, Filter> {
-    pub(crate) fn new(node: Node<'a>, filter: Filter) -> Self {
-        let front = previous_filtered_sibling(Some(node), &filter);
-        let back = node
-            .filtered_parent(&filter)
-            .and_then(|parent| parent.first_filtered_child(&filter));
-        Self {
-            filter,
-            back,
-            done: back.is_none() || front.is_none(),
-            front,
-        }
-    }
-}
-
-impl<'a, Filter: Fn(&Node) -> FilterResult> Iterator for PrecedingFilteredSiblings<'a, Filter> {
-    type Item = Node<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            None
-        } else {
-            self.done = self
-                .front
-                .as_ref()
-                .zip(self.back.as_ref())
-                .map(|(f, b)| f.id() == b.id())
-                .unwrap_or(true);
-            let current = self.front;
-            self.front = previous_filtered_sibling(self.front, &self.filter);
-            current
-        }
-    }
-}
-
-impl<Filter: Fn(&Node) -> FilterResult> DoubleEndedIterator
-    for PrecedingFilteredSiblings<'_, Filter>
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.done {
-            None
-        } else {
-            self.done = self
-                .front
-                .as_ref()
-                .zip(self.back.as_ref())
-                .map(|(f, b)| f.id() == b.id())
-                .unwrap_or(true);
-            let current = self.back;
-            self.back = next_filtered_sibling(self.back, &self.filter);
-            current
-        }
-    }
-}
-
-impl<Filter: Fn(&Node) -> FilterResult> FusedIterator for PrecedingFilteredSiblings<'_, Filter> {}
-
-/// An iterator that yields children of a node according to the specified
-/// filter.
-///
-/// This struct is created by the [`filtered_children`](Node::filtered_children) method on [`Node`].
-pub struct FilteredChildren<'a, Filter: Fn(&Node) -> FilterResult> {
-    filter: Filter,
-    back: Option<Node<'a>>,
-    done: bool,
-    front: Option<Node<'a>>,
-}
-
-impl<'a, Filter: Fn(&Node) -> FilterResult> FilteredChildren<'a, Filter> {
-    pub(crate) fn new(node: Node<'a>, filter: Filter) -> Self {
-        let front = node.first_filtered_child(&filter);
-        let back = node.last_filtered_child(&filter);
-        Self {
-            filter,
-            back,
-            done: back.is_none() || front.is_none(),
-            front,
-        }
-    }
-}
-
-impl<'a, Filter: Fn(&Node) -> FilterResult> Iterator for FilteredChildren<'a, Filter> {
-    type Item = Node<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            None
-        } else {
-            self.done = self
-                .front
-                .as_ref()
-                .zip(self.back.as_ref())
-                .map(|(f, b)| f.id() == b.id())
-                .unwrap_or(true);
-            let current = self.front;
-            self.front = next_filtered_sibling(self.front, &self.filter);
-            current
-        }
-    }
-}
-
-impl<Filter: Fn(&Node) -> FilterResult> DoubleEndedIterator for FilteredChildren<'_, Filter> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.done {
-            None
-        } else {
-            self.done = self
-                .front
-                .as_ref()
-                .zip(self.back.as_ref())
-                .map(|(f, b)| f.id() == b.id())
-                .unwrap_or(true);
-            let current = self.back;
-            self.back = previous_filtered_sibling(self.back, &self.filter);
-            current
-        }
-    }
-}
-
-impl<Filter: Fn(&Node) -> FilterResult> FusedIterator for FilteredChildren<'_, Filter> {}
+impl<Filter: Fn(&Node) -> FilterResult> FusedIterator for FilteredNodes<'_, Filter> {}
 
 pub(crate) enum LabelledBy<'a, Filter: Fn(&Node) -> FilterResult> {
-    FromDescendants(FilteredChildren<'a, Filter>),
+    FromDescendants(FilteredNodes<'a, Filter>),
     Explicit {
         ids: core::slice::Iter<'a, LocalNodeId>,
         tree_state: &'a TreeState,
@@ -615,19 +270,139 @@ mod tests {
             false,
         );
         let root = tree.state().root();
-        let ids = |nodes: Vec<crate::Node<'_>>| {
-            nodes
-                .into_iter()
-                .map(|node| node.id().to_components().0)
-                .collect::<Vec<_>>()
-        };
+        let id = |node: crate::Node<'_>| node.id().to_components().0;
         assert_eq!(
-            ids(root.filtered_children(common_filter).collect()),
+            root.filtered_children(common_filter)
+                .map(id)
+                .collect::<Vec<_>>(),
             [LocalNodeId(1), LocalNodeId(7)]
         );
         assert_eq!(
-            ids(root.filtered_children(common_filter).rev().collect()),
+            root.filtered_children(common_filter)
+                .rev()
+                .map(id)
+                .collect::<Vec<_>>(),
             [LocalNodeId(7), LocalNodeId(1)]
+        );
+    }
+
+    #[test]
+    fn filtered_iterators_support_mixed_ends_and_stay_exhausted() {
+        fn check<'a, I: DoubleEndedIterator<Item = crate::Node<'a>>>(
+            make_iter: impl Fn() -> I,
+            expected: &[LocalNodeId],
+        ) {
+            for mask in 0..(1 << expected.len()) {
+                let mut iter = make_iter();
+                let mut remaining = expected.iter();
+                for step in 0..expected.len() {
+                    let (actual, expected) = if mask & (1 << step) == 0 {
+                        (iter.next(), remaining.next())
+                    } else {
+                        (iter.next_back(), remaining.next_back())
+                    };
+                    assert_eq!(
+                        actual.map(|node| node.id().to_components().0),
+                        expected.copied()
+                    );
+                }
+                assert!(iter.next().is_none());
+                assert!(iter.next_back().is_none());
+                assert!(iter.next().is_none());
+            }
+        }
+
+        let tree = test_tree();
+        let root = tree.state().root();
+        let first = tree.state().node_by_id(nid(PARAGRAPH_0_ID)).unwrap();
+        let last = tree.state().node_by_id(nid(BUTTON_3_2_ID)).unwrap();
+        let expected = [
+            PARAGRAPH_0_ID,
+            LABEL_1_1_ID,
+            PARAGRAPH_2_ID,
+            LABEL_3_1_0_ID,
+            BUTTON_3_2_ID,
+        ];
+        check(|| root.filtered_children(test_tree_filter), &expected);
+        check(
+            || first.following_filtered_siblings(test_tree_filter),
+            &expected[1..],
+        );
+        check(
+            || last.preceding_filtered_siblings(test_tree_filter),
+            &[LABEL_3_1_0_ID, PARAGRAPH_2_ID, LABEL_1_1_ID, PARAGRAPH_0_ID],
+        );
+        check(|| root.following_filtered_siblings(test_tree_filter), &[]);
+        check(|| root.preceding_filtered_siblings(test_tree_filter), &[]);
+        check(|| first.filtered_children(test_tree_filter), &[]);
+    }
+
+    #[test]
+    fn empty_filtered_ranges_do_not_search_the_opposite_end() {
+        use core::cell::Cell;
+
+        let tree = test_tree();
+        let root = tree.state().root();
+        let calls = Cell::new(0);
+        let mut children = root.filtered_children(|_| {
+            calls.set(calls.get() + 1);
+            crate::FilterResult::ExcludeSubtree
+        });
+        assert!(children.next().is_none());
+        assert!(children.next_back().is_none());
+        assert_eq!(calls.get(), root.child_ids().len());
+
+        let include = |_: &crate::Node<'_>| {
+            calls.set(calls.get() + 1);
+            crate::FilterResult::Include
+        };
+        calls.set(0);
+        let first = root.children().next().unwrap();
+        assert!(first
+            .preceding_filtered_siblings(include)
+            .next_back()
+            .is_none());
+        assert_eq!(calls.get(), 1);
+        calls.set(0);
+        let last = root.children().next_back().unwrap();
+        assert!(last.following_filtered_siblings(include).next().is_none());
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn siblings_keep_exact_lengths_when_consumed_from_both_ends() {
+        fn check(
+            mut iter: impl DoubleEndedIterator<Item = NodeId> + ExactSizeIterator,
+            expected: [LocalNodeId; 3],
+        ) {
+            assert_eq!(iter.len(), 3);
+            assert_eq!(iter.next().unwrap().to_components().0, expected[0]);
+            assert_eq!(iter.len(), 2);
+            assert_eq!(iter.next_back().unwrap().to_components().0, expected[2]);
+            assert_eq!(iter.len(), 1);
+            assert_eq!(iter.next_back().unwrap().to_components().0, expected[1]);
+            assert_eq!(iter.size_hint(), (0, Some(0)));
+            assert!(iter.next().is_none());
+            assert!(iter.next_back().is_none());
+        }
+
+        let tree = test_tree();
+        let first = tree.state().node_by_id(nid(PARAGRAPH_0_ID)).unwrap();
+        let last = tree
+            .state()
+            .node_by_id(nid(PARAGRAPH_3_IGNORED_ID))
+            .unwrap();
+        check(
+            first.following_sibling_ids(),
+            [
+                PARAGRAPH_1_IGNORED_ID,
+                PARAGRAPH_2_ID,
+                PARAGRAPH_3_IGNORED_ID,
+            ],
+        );
+        check(
+            last.preceding_sibling_ids(),
+            [PARAGRAPH_2_ID, PARAGRAPH_1_IGNORED_ID, PARAGRAPH_0_ID],
         );
     }
 
@@ -1070,6 +845,8 @@ mod tests {
         assert_eq!(subtree_root_id, filtered_children[0].id());
 
         let document = &filtered_children[0];
+        assert_eq!(document.following_sibling_ids().len(), 0);
+        assert_eq!(document.preceding_sibling_ids().len(), 0);
         let doc_children: Vec<_> = document.filtered_children(common_filter).collect();
         assert_eq!(1, doc_children.len());
         let button_id = NodeId::new(LocalNodeId(1), TreeIndex(1));
