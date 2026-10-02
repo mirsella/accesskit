@@ -272,9 +272,7 @@ fn next_filtered_sibling<'a>(
             if result == FilterResult::Include {
                 return next;
             }
-            if result == FilterResult::ExcludeNode {
-                consider_children = true;
-            }
+            consider_children = result == FilterResult::ExcludeNode;
         } else {
             let parent = current.parent();
             next = parent;
@@ -311,9 +309,7 @@ fn previous_filtered_sibling<'a>(
             if result == FilterResult::Include {
                 return previous;
             }
-            if result == FilterResult::ExcludeNode {
-                consider_children = true;
-            }
+            consider_children = result == FilterResult::ExcludeNode;
         } else {
             let parent = current.parent();
             previous = parent;
@@ -590,6 +586,50 @@ mod tests {
     };
     use accesskit::{Node, NodeId as LocalNodeId, Role, Tree, TreeId, TreeUpdate, Uuid};
     use alloc::{vec, vec::Vec};
+
+    #[test]
+    fn filtered_siblings_skip_hidden_subtrees_after_empty_containers() {
+        let mut root = Node::new(Role::Window);
+        root.set_children([LocalNodeId(1), LocalNodeId(2), LocalNodeId(7)]);
+        let mut transparent = Node::new(Role::GenericContainer);
+        transparent.set_children([LocalNodeId(3), LocalNodeId(4), LocalNodeId(6)]);
+        let mut hidden = Node::new(Role::Group);
+        hidden.set_hidden();
+        hidden.set_children([LocalNodeId(5)]);
+        let tree = crate::Tree::new(
+            TreeUpdate {
+                nodes: vec![
+                    (LocalNodeId(0), root),
+                    (LocalNodeId(1), Node::new(Role::Button)),
+                    (LocalNodeId(2), transparent),
+                    (LocalNodeId(3), Node::new(Role::GenericContainer)),
+                    (LocalNodeId(4), hidden),
+                    (LocalNodeId(5), Node::new(Role::Button)),
+                    (LocalNodeId(6), Node::new(Role::GenericContainer)),
+                    (LocalNodeId(7), Node::new(Role::Button)),
+                ],
+                tree: Some(Tree::new(LocalNodeId(0))),
+                tree_id: TreeId::ROOT,
+                focus: LocalNodeId(0),
+            },
+            false,
+        );
+        let root = tree.state().root();
+        let ids = |nodes: Vec<crate::Node<'_>>| {
+            nodes
+                .into_iter()
+                .map(|node| node.id().to_components().0)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids(root.filtered_children(common_filter).collect()),
+            [LocalNodeId(1), LocalNodeId(7)]
+        );
+        assert_eq!(
+            ids(root.filtered_children(common_filter).rev().collect()),
+            [LocalNodeId(7), LocalNodeId(1)]
+        );
+    }
 
     #[test]
     fn following_siblings() {
