@@ -464,7 +464,7 @@ fn sync_subtree(
             .node_by_id(id)
             .expect("filtered child must belong to the retained tree");
         (
-            semantics_for(tree, &node, &state_ref.root.id()),
+            semantics_for(&node, &state_ref.root.id()),
             node.filtered_children(web_filter)
                 .map(|child| child.id())
                 .collect::<Vec<_>>(),
@@ -815,9 +815,7 @@ fn dispatch_action(
         if !node.supports_action(action, &common_filter_with_root_exception) {
             return false;
         }
-        let Some((target_node, target_tree)) = tree.state().locate_node(id) else {
-            return false;
-        };
+        let (target_node, target_tree) = node.locate();
         ActionRequest {
             action,
             target_tree,
@@ -890,12 +888,9 @@ fn sync_native_text(node: &DomNode, semantics: &Semantics) -> Result<(), JsValue
     Ok(())
 }
 
-fn semantics_for(tree: &Tree, node: &Node, root_id: &str) -> Semantics {
+fn semantics_for(node: &Node, root_id: &str) -> Semantics {
     let dom_role = dom_role(node.role());
-    let (_, tree_id) = tree
-        .state()
-        .locate_node(node.id())
-        .expect("consumer node must belong to its tree");
+    let (_, tree_id) = node.locate();
     let data = node.data();
     let mut attributes = Vec::new();
     if let Some(role) = dom_role.aria_role {
