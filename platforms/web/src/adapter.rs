@@ -538,6 +538,7 @@ fn create_dom_node(
     let state_ref = state.borrow();
     let tree = state_ref.tree.as_ref().expect("DOM sync requires a tree");
     let (local_id, tree_id) = tree
+        .state()
         .locate_node(id)
         .expect("DOM node must belong to the retained tree");
     let element = state_ref
@@ -814,7 +815,7 @@ fn dispatch_action(
         if !node.supports_action(action, &common_filter_with_root_exception) {
             return false;
         }
-        let Some((target_node, target_tree)) = tree.locate_node(id) else {
+        let Some((target_node, target_tree)) = tree.state().locate_node(id) else {
             return false;
         };
         ActionRequest {
@@ -892,6 +893,7 @@ fn sync_native_text(node: &DomNode, semantics: &Semantics) -> Result<(), JsValue
 fn semantics_for(tree: &Tree, node: &Node, root_id: &str) -> Semantics {
     let dom_role = dom_role(node.role());
     let (_, tree_id) = tree
+        .state()
         .locate_node(node.id())
         .expect("consumer node must belong to its tree");
     let data = node.data();
